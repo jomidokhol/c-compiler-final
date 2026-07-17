@@ -1,0 +1,10 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+# Allow the main .env file to be checked into git per user request
+.env.local
+.env.*.local
+!.env.example
