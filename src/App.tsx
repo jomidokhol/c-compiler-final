@@ -213,16 +213,33 @@ export default function App() {
         }),
       });
 
+      const contentType = response.headers.get("content-type");
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to compile. Server returned error.");
+        let errorMsg = "Failed to compile. Server returned error.";
+        try {
+          if (contentType && contentType.includes("application/json")) {
+            const errorData = await response.json();
+            errorMsg = errorData.error || errorMsg;
+          } else {
+            const textResponse = await response.text();
+            errorMsg = textResponse || errorMsg;
+          }
+        } catch (parseErr) {
+          // Fallback if parsing fails
+        }
+        throw new Error(errorMsg);
       }
 
-      const result: CompileResult = await response.json();
-      setCompileOutput(result.output);
-      setCompileErrors(result.errors || []);
-      setCompileSuccess(result.success);
-      setHasRun(true);
+      if (contentType && contentType.includes("application/json")) {
+        const result: CompileResult = await response.json();
+        setCompileOutput(result.output);
+        setCompileErrors(result.errors || []);
+        setCompileSuccess(result.success);
+        setHasRun(true);
+      } else {
+        const textResponse = await response.text();
+        throw new Error(textResponse || "Invalid response format from server.");
+      }
     } catch (err: any) {
       console.error(err);
       setCompileOutput(`[ERROR] ${err.message || "An unexpected error occurred while communicating with the compiler server."}`);

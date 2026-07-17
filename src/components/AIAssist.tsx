@@ -162,12 +162,28 @@ If they ask you to perform small tasks (like explaining a concept, writing a sho
         })
       });
 
+      const contentType = response.headers.get("content-type");
       if (!response.ok) {
-        throw new Error("Chat service is currently occupied. Please try again.");
+        let errorMsg = "Chat service is currently occupied. Please try again.";
+        try {
+          if (contentType && contentType.includes("application/json")) {
+            const errData = await response.json();
+            errorMsg = errData.error || errorMsg;
+          } else {
+            const rawText = await response.text();
+            errorMsg = rawText || errorMsg;
+          }
+        } catch (e) {}
+        throw new Error(errorMsg);
       }
 
-      const data = await response.json();
-      setMessages(prev => [...prev, { role: "model", text: data.text || "I could not formulate an answer." }]);
+      if (contentType && contentType.includes("application/json")) {
+        const data = await response.json();
+        setMessages(prev => [...prev, { role: "model", text: data.text || "I could not formulate an answer." }]);
+      } else {
+        const rawText = await response.text();
+        throw new Error(rawText || "Invalid response format from server.");
+      }
     } catch (err: any) {
       console.error(err);
       setMessages(prev => [
