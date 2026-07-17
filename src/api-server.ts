@@ -108,82 +108,136 @@ const app = express();
 app.use(express.json());
 
 // API Route for Compile (Real GCC Compiler Execution)
-app.post("/api/compile", async (req, res) => {
-  const { code, input } = req.body;
-  if (!code) {
-    return res.status(400).json({ error: "Code is required" });
-  }
+const compileHandler = async (req: express.Request, res: express.Response) => {
+  try {
+    const { code, input } = req.body;
+    if (!code) {
+      return res.status(400).json({ error: "Code is required" });
+    }
 
-  // Pre-check: Verify if native GCC compiler exists on the host
-  exec("which gcc", (gccCheckErr) => {
-    if (gccCheckErr) {
+    // Immediately handle Vercel serverless environment
+    if (process.env.VERCEL === "1") {
       return res.json({
         success: false,
         errors: [{
           line: 1,
-          message: "GCC compiler is not available on this server.",
+          message: "GCC compiler is not available on Vercel.",
           type: "error"
         }],
         output: "Error: GCC compiler was not found on this hosting environment.\n\n👉 Vercel Serverless runs in a highly restricted, read-only Lambda container and does NOT support GCC or compiling native C binaries natively.\n\n👉 Recommendation: If you are deploying to Vercel, the frontend & AI Chat will work perfectly! However, to run C code, you should host this application on a containerized or server-based environment like Railway, Render, Koyeb, Fly.io, or any standard VPS where GCC is preinstalled."
       });
     }
 
-    const id = crypto.randomBytes(8).toString("hex");
-    const srcFile = `/tmp/code_${id}.c`;
-    const execFile = `/tmp/code_${id}`;
-
+    // Pre-check: Verify if native GCC compiler exists on the host
     try {
-      // Write user code to temporary file
-      fs.writeFileSync(srcFile, code, "utf8");
-
-      // Compile code using native GCC (including the math library -lm)
-      const compileCmd = `gcc -O2 ${srcFile} -o ${execFile} -lm`;
-      
-      exec(compileCmd, { timeout: 5000 }, async (err, stdout, stderr) => {
-        const compileErrors = parseGccErrors(stderr);
-        const success = !err; // Compilation successful if exit code is 0
-
-        if (!success) {
-          // Compilation failed
-          try { fs.unlinkSync(srcFile); } catch {}
-          try { fs.unlinkSync(execFile); } catch {}
-          
+      exec("which gcc", (gccCheckErr) => {
+        if (gccCheckErr) {
           return res.json({
             success: false,
-            errors: compileErrors.length > 0 ? compileErrors : [{ line: 1, message: stderr || "Compilation failed", type: "error" }],
-            output: stderr || "Compilation failed with unknown error"
+            errors: [{
+              line: 1,
+              message: "GCC compiler is not available on this server.",
+              type: "error"
+            }],
+            output: "Error: GCC compiler was not found on this hosting environment.\n\n👉 Vercel Serverless runs in a highly restricted, read-only Lambda container and does NOT support GCC or compiling native C binaries natively.\n\n👉 Recommendation: If you are deploying to Vercel, the frontend & AI Chat will work perfectly! However, to run C code, you should host this application on a containerized or server-based environment like Railway, Render, Koyeb, Fly.io, or any standard VPS where GCC is preinstalled."
           });
         }
 
-        // Compilation succeeded, execute the binary
-        const runResult = await runBinary(execFile, input || "");
+        const id = crypto.randomBytes(8).toString("hex");
+        const srcFile = `/tmp/code_${id}.c`;
+        const execFile = `/tmp/code_${id}`;
 
-        // Clean up temporary files
-        try { fs.unlinkSync(srcFile); } catch {}
-        try { fs.unlinkSync(execFile); } catch {}
+        try {
+          // Write user code to temporary file
+          fs.writeFileSync(srcFile, code, "utf8");
 
-        res.json({
-          success: true,
-          errors: compileErrors, // Include warnings if any
-          output: runResult.stdout + (runResult.stderr ? "\n" + runResult.stderr : "")
-        });
+          // Compile code using native GCC (including the math library -lm)
+          const compileCmd = `gcc -O2 ${srcFile} -o ${execFile} -lm`;
+          
+          exec(compileCmd, { timeout: 5000 }, async (err, stdout, stderr) => {
+            try {
+              const compileErrors = parseGccErrors(stderr);
+              const success = !err; // Compilation successful if exit code is 0
+
+              if (!success) {
+                // Compilation failed
+                try { fs.unlinkSync(srcFile); } catch {}
+                try { fs.unlinkSync(execFile); } catch {}
+                
+                return res.json({
+                  success: false,
+                  errors: compileErrors.length > 0 ? compileErrors : [{ line: 1, message: stderr || "Compilation failed", type: "error" }],
+                  output: stderr || "Compilation failed with unknown error"
+                });
+              }
+
+              // Compilation succeeded, execute the binary
+              try {
+                const runResult = await runBinary(execFile, input || "");
+
+                // Clean up temporary files
+                try { fs.unlinkSync(srcFile); } catch {}
+                try { fs.unlinkSync(execFile); } catch {}
+
+                res.json({
+                  success: true,
+                  errors: compileErrors, // Include warnings if any
+                  output: runResult.stdout + (runResult.stderr ? "\n" + runResult.stderr : "")
+                });
+              } catch (runErr: any) {
+                try { fs.unlinkSync(srcFile); } catch {}
+                try { fs.unlinkSync(execFile); } catch {}
+                res.json({
+                  success: false,
+                  errors: [{ line: 1, message: runErr.message || "Execution error", type: "error" }],
+                  output: `Execution error: ${runErr.message || "Unknown execution error"}`
+                });
+              }
+            } catch (innerErr: any) {
+              try { fs.unlinkSync(srcFile); } catch {}
+              try { fs.unlinkSync(execFile); } catch {}
+              res.json({
+                success: false,
+                errors: [{ line: 1, message: innerErr.message || "Unexpected compilation parsing error", type: "error" }],
+                output: `Unexpected compile feedback error: ${innerErr.message || "Unknown error"}`
+              });
+            }
+          });
+
+        } catch (err: any) {
+          console.error("Compilation writing process error:", err);
+          try { fs.unlinkSync(srcFile); } catch {}
+          try { fs.unlinkSync(execFile); } catch {}
+          res.json({
+            success: false,
+            errors: [{ line: 1, message: err.message || "Compilation error", type: "error" }],
+            output: `Compilation process error: ${err.message || "Unknown error"}`
+          });
+        }
       });
-
-    } catch (err: any) {
-      console.error("Compilation error:", err);
-      // Clean up in case of crash
-      try { fs.unlinkSync(srcFile); } catch {}
-      try { fs.unlinkSync(execFile); } catch {}
-      
-      res.status(500).json({
-        error: err.message || "Internal server error during compilation."
+    } catch (execErr: any) {
+      console.error("GCC check execution error:", execErr);
+      return res.json({
+        success: false,
+        errors: [{
+          line: 1,
+          message: "GCC check could not be executed on this host.",
+          type: "error"
+        }],
+        output: `Error checking for GCC compiler: ${execErr.message}\n\n👉 Recommendation: If you are deploying to Vercel, please note that C execution requires a standard VPS or containerized platform like Railway or Render.`
       });
     }
-  });
-});
+  } catch (outerErr: any) {
+    console.error("Outer route error:", outerErr);
+    res.status(500).json({ error: outerErr.message || "Internal server error." });
+  }
+};
+
+app.post("/api/compile", compileHandler);
+app.post("/compile", compileHandler);
 
 // API Route for AI Assist Chat
-app.post("/api/chat", async (req, res) => {
+const chatHandler = async (req: express.Request, res: express.Response) => {
   try {
     const { messages, code, input } = req.body;
     if (!messages || !Array.isArray(messages)) {
@@ -285,6 +339,9 @@ If they ask you to perform small tasks (like explaining a concept, writing a sho
     console.error("Chat error:", err);
     res.status(500).json({ error: err.message || "Internal server error during chat." });
   }
-});
+};
+
+app.post("/api/chat", chatHandler);
+app.post("/chat", chatHandler);
 
 export default app;
