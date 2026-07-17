@@ -6,7 +6,7 @@ import app from "./src/api-server";
 dotenv.config();
 
 async function startServer() {
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || "3000", 10);
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
